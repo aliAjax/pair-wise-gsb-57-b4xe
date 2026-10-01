@@ -41,6 +41,7 @@ import {
 import { ArrowLeft, FileCheck2, Link2Off, ShieldAlert } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { StatusBadge, TypeBadge } from '@/components/StatusBadge'
+import { CredentialFulfillmentPanel } from './CredentialFulfillmentPanel'
 import {
   useAddCommentMutation,
   useAddConflictMutation,
@@ -62,6 +63,7 @@ import {
   type WorkflowStep,
 } from '@/lib/schemas'
 import { deadlineState } from '@/services/workflow'
+import { closureBlockers } from '@/services/credentials'
 
 type DialogType =
   | 'edit'
@@ -121,6 +123,13 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
   const completedTasks = request.tasks.filter((task) => task.status === 'completed').length
   const currentTask = request.tasks.find((task) => task.status === 'active')
   const systems = data.systems.filter((system) => request.affectedSystemIds.includes(system.id))
+  const openDiscrepancies = request.fulfillmentDiscrepancies.filter(
+    (item) => item.status === 'open',
+  ).length
+  const credentialReady = request.systemFulfillments.filter(
+    (fulfillment) => fulfillment.lastSuccessReceiptId,
+  ).length
+  const credentialBlockers = closureBlockers(request)
 
   function openDialog(type: DialogType, task?: WorkflowStep, index = 0) {
     if (!request) return
@@ -349,15 +358,15 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
             colorScheme="brand"
           />
         </Box>
-        <Box className={`metric ${request.conflicts.length ? 'danger' : ''}`}>
+        <Box className={`metric ${request.conflicts.length || openDiscrepancies ? 'danger' : ''}`}>
           <Text color="gray.600" fontSize="sm">
-            冲突与例外
+            冲突与凭证差异
           </Text>
           <Heading mt="2" size="md">
-            {request.conflicts.length}
+            {request.conflicts.length + openDiscrepancies}
           </Heading>
           <Text mt="1" color="gray.500" fontSize="xs">
-            未解决时禁止关闭
+            通用冲突 {request.conflicts.length} · 凭证差异 {openDiscrepancies}
           </Text>
         </Box>
       </SimpleGrid>
@@ -365,6 +374,17 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
       {request.conflicts.length ? (
         <Alert status="error" mb="4" borderRadius="5px">
           当前请求处于复核状态：{request.conflicts.join('；')}
+        </Alert>
+      ) : null}
+      {openDiscrepancies ? (
+        <Alert status="error" mb="4" borderRadius="5px">
+          有 {openDiscrepancies} 项跨系统凭证差异待处理，处理完成前不能关闭请求。
+        </Alert>
+      ) : null}
+      {!credentialBlockers.length && request.affectedSystemIds.length > 0 && request.status !== 'completed' ? (
+        <Alert status="success" mb="4" borderRadius="5px">
+          全部 {request.affectedSystemIds.length} 个受影响系统已取得最新成功凭证
+          （{credentialReady}/{request.affectedSystemIds.length}），凭证差异已处理完成。
         </Alert>
       ) : null}
       {request.duplicateOf ? (
@@ -640,6 +660,16 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
           </VStack>
         </Box>
       </div>
+
+      {request.identity.status === 'verified' ? (
+        <CredentialFulfillmentPanel request={request} systems={systems} />
+      ) : (
+        <Box className="panel">
+          <Alert status="warning" borderRadius="5px">
+            身份核验通过后才开始跨系统履约凭证登记；当前系统凭证处于初始化待处理状态。
+          </Alert>
+        </Box>
+      )}
 
       <div className="two-column">
         <Box className="panel">

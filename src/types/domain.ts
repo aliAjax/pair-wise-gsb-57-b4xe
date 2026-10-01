@@ -1,13 +1,16 @@
 export type {
+  CredentialReceipt,
   DataSystem,
   AuditEntry,
   ExecutionEvidence,
+  FulfillmentDiscrepancy,
   IdentityCheck,
   PrivacyRequest,
   Region,
   RequestStatus,
   RequestType,
   ReviewComment,
+  SystemFulfillment,
   WorkflowStep,
   WorkspaceState,
 } from '@/lib/schemas'

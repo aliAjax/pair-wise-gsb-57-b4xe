@@ -5,10 +5,15 @@ import {
   addEvidence,
   assignTask,
   closeRequest,
+  confirmSystemFulfillment,
   createRequest,
   extendRequest,
+  raiseFulfillmentDiscrepancy,
+  receiveSystemCredential,
   recordExport,
   resolveConflict,
+  resolveFulfillmentDiscrepancy,
+  retryFulfillment,
   saveRequest,
   taskAction,
   verifyIdentity,
@@ -19,12 +24,17 @@ import {
   closeRequestInputSchema,
   commentInputSchema,
   conflictInputSchema,
+  confirmSystemInputSchema,
   createRequestInputSchema,
+  credentialInputSchema,
+  discrepancyInputSchema,
   evidenceInputSchema,
   extendRequestInputSchema,
   identityInputSchema,
   recordExportInputSchema,
   resolveConflictInputSchema,
+  resolveDiscrepancyInputSchema,
+  retryFulfillmentInputSchema,
   saveRequestInputSchema,
   taskActionInputSchema,
 } from '@/lib/schemas'
@@ -165,6 +175,80 @@ export const appRouter = t.router({
       .mutation(({ input }) =>
         execute(() =>
           recordExport(input.state, input.scope, input.count, input.operator),
+        ),
+      ),
+    receiveCredential: publicProcedure
+      .input(credentialInputSchema)
+      .mutation(({ input }) =>
+        execute(() =>
+          receiveSystemCredential(
+            input.state,
+            input.requestId,
+            {
+              systemId: input.systemId,
+              outcome: input.outcome,
+              batch: input.batch,
+              batchSeq: input.batchSeq,
+              credentialRef: input.credentialRef,
+              detail: input.detail,
+            },
+            input.operator,
+          ),
+        ),
+      ),
+    retryFulfillment: publicProcedure
+      .input(retryFulfillmentInputSchema)
+      .mutation(({ input }) =>
+        execute(() =>
+          retryFulfillment(
+            input.state,
+            input.requestId,
+            input.systemId,
+            input.reason,
+            input.operator,
+          ),
+        ),
+      ),
+    confirmSystem: publicProcedure
+      .input(confirmSystemInputSchema)
+      .mutation(({ input }) =>
+        execute(() =>
+          confirmSystemFulfillment(
+            input.state,
+            input.requestId,
+            input.systemId,
+            input.note,
+            input.operator,
+          ),
+        ),
+      ),
+    raiseDiscrepancy: publicProcedure
+      .input(discrepancyInputSchema)
+      .mutation(({ input }) =>
+        execute(() =>
+          raiseFulfillmentDiscrepancy(
+            input.state,
+            input.requestId,
+            {
+              systemId: input.systemId,
+              kind: input.kind,
+              description: input.description,
+            },
+            input.operator,
+          ),
+        ),
+      ),
+    resolveDiscrepancy: publicProcedure
+      .input(resolveDiscrepancyInputSchema)
+      .mutation(({ input }) =>
+        execute(() =>
+          resolveFulfillmentDiscrepancy(
+            input.state,
+            input.requestId,
+            input.discrepancyId,
+            input.resolution,
+            input.operator,
+          ),
         ),
       ),
   }),

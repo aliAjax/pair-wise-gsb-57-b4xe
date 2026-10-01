@@ -1,15 +1,33 @@
 import type {
+  FulfillmentDiscrepancy,
   IdentityCheck,
   PrivacyRequest,
   RequestStatus,
   RequestType,
+  SystemFulfillment,
   WorkspaceState,
 } from '@/types/domain'
 import { addDays, buildWorkflowSteps, responseDays } from './workflow'
+import {
+  closureBlockers,
+  confirmRemainingOnClose,
+  createSystemFulfillment,
+  getFulfillment,
+  raiseDiscrepancy,
+  receiveCredential,
+  confirmSystem,
+  refreshFulfillmentStatus,
+  resolveDiscrepancy,
+  retryFailedSystems,
+} from './credentials'
 
 const cloneState = (state: WorkspaceState): WorkspaceState => structuredClone(state)
 const now = () => new Date().toISOString()
 const id = (prefix: string) => `${prefix}-${crypto.randomUUID()}`
+
+function systemName(state: WorkspaceState, systemId: string): string {
+  return state.systems.find((system) => system.id === systemId)?.name ?? systemId
+}
 
 function digest(value: string): string {
   let hash = 2166136261
@@ -48,14 +66,14 @@ function appendAudit(
 function mutateRequest(
   state: WorkspaceState,
   requestId: string,
-  mutation: (request: PrivacyRequest, draft: WorkspaceState) => void,
+  mutation: (request: PrivacyRequest, draft: WorkspaceState) => string | void,
   audit: { action: string; operator: string; detail: string },
 ): WorkspaceState {
   const draft = cloneState(state)
   const request = draft.requests.find((item) => item.id === requestId)
   if (!request) throw new Error('请求不存在')
-  mutation(request, draft)
-  appendAudit(draft, request, audit.action, audit.operator, audit.detail)
+  const dynamicDetail = mutation(request, draft)
+  appendAudit(draft, request, audit.action, audit.operator, dynamicDetail ?? audit.detail)
   draft.revision += 1
   return draft
 }
@@ -124,6 +142,8 @@ export function createRequest(
       systems: draft.systems,
     }),
     evidence: [],
+    systemFulfillments: input.affectedSystemIds.map((systemId) => createSystemFulfillment(systemId)),
+    fulfillmentDiscrepancies: [],
     conflicts: [],
     resultSummary: '',
     closureReason: '',
@@ -347,7 +367,7 @@ export function resolveConflict(
       if (!conflict) throw new Error('冲突项不存在')
       request.conflicts.splice(conflictIndex, 1)
       if (!request.conflicts.length && request.identity.status === 'verified') {
-        request.status = 'processing'
+        refreshFulfillmentStatus(request)
       } else {
         request.status = 'review-required'
       }
@@ -397,12 +417,18 @@ export function closeRequest(
       if (request.conflicts.length) {
         throw new Error('仍有未解决冲突，不能关闭请求')
       }
+      const credentialBlockers = closureBlockers(request)
+      if (credentialBlockers.length) {
+        throw new Error(credentialBlockers[0])
+      }
       if (new Date(request.dueAt) > new Date() && !closureReason.trim()) {
         throw new Error('截止时间前关闭必须填写提前关闭理由')
       }
       request.resultSummary = resultSummary
       request.closureReason = closureReason
       request.status = 'completed'
+      // 关闭即确认全部系统，之后迟到凭证只留档，不退回待处理
+      confirmRemainingOnClose(request, operator)
       const closeTask = request.tasks.find((task) => task.id.endsWith('-close'))
       if (closeTask) {
         closeTask.status = 'completed'
@@ -455,3 +481,151 @@ export function recordExport(
   draft.revision += 1
   return draft
 }
+
+export interface ReceiveCredentialServiceInput {
+  systemId: string
+  outcome: 'success' | 'failure'
+  batch: string
+  batchSeq: number
+  credentialRef: string
+  detail: string
+}
+
+export function receiveSystemCredential(
+  state: WorkspaceState,
+  requestId: string,
+  input: ReceiveCredentialServiceInput,
+  operator: string,
+): WorkspaceState {
+  return mutateRequest(
+    state,
+    requestId,
+    (request, draft) => {
+      if (request.identity.status !== 'verified') {
+        throw new Error('身份未核验通过，跨系统履约尚未开始')
+      }
+      if (request.status === 'completed') {
+        throw new Error('请求已关闭，凭证仅可在已确认系统台账中留档')
+      }
+      const name = systemName(draft, input.systemId)
+      const { accepted, receipt } = receiveCredential(request, { ...input, operator })
+      refreshFulfillmentStatus(request)
+      const outcomeText = input.outcome === 'success' ? '成功凭证' : '失败回报'
+      return accepted
+        ? `接收${name}${outcomeText}（${input.batch}）：${receipt.detail || receipt.credentialRef}。`
+        : `忽略${name}${outcomeText}（${input.batch}）：${receipt.reason}`
+    },
+    {
+      action: '接收系统凭证',
+      operator,
+      detail: '',
+    },
+  )
+}
+
+export function retryFulfillment(
+  state: WorkspaceState,
+  requestId: string,
+  systemId: string | undefined,
+  reason: string,
+  operator: string,
+): WorkspaceState {
+  return mutateRequest(
+    state,
+    requestId,
+    (request, draft) => {
+      if (request.identity.status !== 'verified') {
+        throw new Error('身份未核验通过，不能发起重试')
+      }
+      if (request.status === 'completed') throw new Error('请求已关闭，不能再发起重试')
+      const targets = retryFailedSystems(request, { systemId, reason, operator })
+      // 失败重试：请求离开待关闭，回到履约处理中
+      request.status = 'processing'
+      const names = targets.map((item) => systemName(draft, item.systemId)).join('、')
+      return `按原系统重试 ${names}（仅补未成功系统），原因：${reason}。最近成功凭证与失败说明已保留。`
+    },
+    {
+      action: '按原系统重试履约',
+      operator,
+      detail: reason,
+    },
+  )
+}
+
+export function confirmSystemFulfillment(
+  state: WorkspaceState,
+  requestId: string,
+  systemId: string,
+  note: string,
+  operator: string,
+): WorkspaceState {
+  return mutateRequest(
+    state,
+    requestId,
+    (request, draft) => {
+      confirmSystem(request, systemId, note, operator)
+      refreshFulfillmentStatus(request)
+      const name = systemName(draft, systemId)
+      return `确认 ${name} 履约结果，之后迟到凭证仅留档、不退回待处理。${note ? `说明：${note}` : ''}`
+    },
+    {
+      action: '确认系统履约结果',
+      operator,
+      detail: note,
+    },
+  )
+}
+
+export function raiseFulfillmentDiscrepancy(
+  state: WorkspaceState,
+  requestId: string,
+  input: {
+    systemId: string
+    kind: FulfillmentDiscrepancy['kind']
+    description: string
+  },
+  operator: string,
+): WorkspaceState {
+  return mutateRequest(
+    state,
+    requestId,
+    (request, draft) => {
+      if (request.status === 'completed') throw new Error('请求已关闭，不能新增凭证差异')
+      const discrepancy = raiseDiscrepancy(request, { ...input, operator })
+      request.status = 'review-required'
+      const name = systemName(draft, input.systemId)
+      return `${name} 凭证差异（${discrepancy.kind}）：${discrepancy.description}`
+    },
+    {
+      action: '提出跨系统凭证差异',
+      operator,
+      detail: input.description,
+    },
+  )
+}
+
+export function resolveFulfillmentDiscrepancy(
+  state: WorkspaceState,
+  requestId: string,
+  discrepancyId: string,
+  resolution: string,
+  operator: string,
+): WorkspaceState {
+  return mutateRequest(
+    state,
+    requestId,
+    (request) => {
+      const discrepancy = resolveDiscrepancy(request, discrepancyId, resolution, operator)
+      refreshFulfillmentStatus(request)
+      return `凭证差异 ${discrepancy.id} 已处理：${resolution}`
+    },
+    {
+      action: '处理凭证差异',
+      operator,
+      detail: resolution,
+    },
+  )
+}
+
+export { closureBlockers, getFulfillment }
+export type { SystemFulfillment }

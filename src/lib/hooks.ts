@@ -135,4 +135,39 @@ export function useRecordExportMutation() {
   )
 }
 
+export function useReceiveCredentialMutation() {
+  return useWorkspaceMutation(
+    (input: Omit<Parameters<typeof trpc.request.receiveCredential.mutate>[0], 'state'>, state) =>
+      trpc.request.receiveCredential.mutate({ ...input, state }),
+  )
+}
+
+export function useRetryFulfillmentMutation() {
+  return useWorkspaceMutation(
+    (input: Omit<Parameters<typeof trpc.request.retryFulfillment.mutate>[0], 'state'>, state) =>
+      trpc.request.retryFulfillment.mutate({ ...input, state }),
+  )
+}
+
+export function useConfirmSystemMutation() {
+  return useWorkspaceMutation(
+    (input: Omit<Parameters<typeof trpc.request.confirmSystem.mutate>[0], 'state'>, state) =>
+      trpc.request.confirmSystem.mutate({ ...input, state }),
+  )
+}
+
+export function useRaiseDiscrepancyMutation() {
+  return useWorkspaceMutation(
+    (input: Omit<Parameters<typeof trpc.request.raiseDiscrepancy.mutate>[0], 'state'>, state) =>
+      trpc.request.raiseDiscrepancy.mutate({ ...input, state }),
+  )
+}
+
+export function useResolveDiscrepancyMutation() {
+  return useWorkspaceMutation(
+    (input: Omit<Parameters<typeof trpc.request.resolveDiscrepancy.mutate>[0], 'state'>, state) =>
+      trpc.request.resolveDiscrepancy.mutate({ ...input, state }),
+  )
+}
+
 export type { PrivacyRequest }

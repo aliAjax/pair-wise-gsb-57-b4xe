@@ -44,6 +44,7 @@ import {
   useWorkspaceQuery,
 } from '@/lib/hooks'
 import { deadlineState } from '@/services/workflow'
+import { discrepancyKindLabels } from '@/lib/schemas'
 
 export function ReviewPage() {
   const router = useRouter()
@@ -69,6 +70,7 @@ export function ReviewPage() {
           request.identity.status === 'insufficient' ||
           request.duplicateOf ||
           request.conflicts.length > 0 ||
+          request.fulfillmentDiscrepancies.some((item) => item.status === 'open') ||
           new Date(request.dueAt).getTime() < Date.now(),
       ) ?? [],
     [data],
@@ -163,10 +165,16 @@ export function ReviewPage() {
         </Box>
         <Box className="metric danger">
           <Text color="gray.600" fontSize="sm">
-            结果冲突
+            结果冲突与凭证差异
           </Text>
           <Heading mt="2" size="md">
-            {queue.reduce((total, request) => total + request.conflicts.length, 0)}
+            {queue.reduce(
+              (total, request) =>
+                total +
+                request.conflicts.length +
+                request.fulfillmentDiscrepancies.filter((item) => item.status === 'open').length,
+              0,
+            )}
           </Heading>
         </Box>
         <Box className="metric info">
@@ -216,6 +224,13 @@ export function ReviewPage() {
                             {conflict}
                           </Text>
                         ))}
+                        {request.fulfillmentDiscrepancies
+                          .filter((item) => item.status === 'open')
+                          .map((item) => (
+                            <Text key={item.id} fontSize="sm" color="orange.700">
+                              凭证差异（{discrepancyKindLabels[item.kind]}）：{item.description}
+                            </Text>
+                          ))}
                       </VStack>
                     </Td>
                     <Td>

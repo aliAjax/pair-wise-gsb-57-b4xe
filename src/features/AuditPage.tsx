@@ -68,13 +68,38 @@ export function AuditPage() {
   function sanitizedPackage() {
     return {
       exportedAt: new Date().toISOString(),
-      policy: '用户隐私权利请求履约操作规范 v1',
+      policy: '用户隐私权利请求履约操作规范 v2',
       summary: {
         requestCount: workspace.requests.length,
         openCount: workspace.requests.filter(
           (request) => !['completed', 'rejected'].includes(request.status),
         ).length,
         systemCount: workspace.systems.length,
+        credentialReceiptCount: workspace.requests.reduce(
+          (total, request) =>
+            total +
+            request.systemFulfillments.reduce(
+              (count, fulfillment) => count + fulfillment.receipts.length,
+              0,
+            ),
+          0,
+        ),
+        ignoredCredentialCount: workspace.requests.reduce(
+          (total, request) =>
+            total +
+            request.systemFulfillments.reduce(
+              (count, fulfillment) =>
+                count + fulfillment.receipts.filter((receipt) => receipt.status === 'ignored').length,
+              0,
+            ),
+          0,
+        ),
+        openDiscrepancyCount: workspace.requests.reduce(
+          (total, request) =>
+            total +
+            request.fulfillmentDiscrepancies.filter((item) => item.status === 'open').length,
+          0,
+        ),
       },
       requests: workspace.requests.map((request) => ({
         code: request.code,
@@ -96,6 +121,52 @@ export function AuditPage() {
         affectedSystems: workspace.systems
           .filter((system) => request.affectedSystemIds.includes(system.id))
           .map((system) => system.name),
+        // 跨系统履约凭证：完整还原每次接收与忽略原因，只含脱敏引用与摘要
+        systemFulfillments: request.systemFulfillments.map((fulfillment) => ({
+          systemName:
+            workspace.systems.find((system) => system.id === fulfillment.systemId)?.name ??
+            fulfillment.systemId,
+          state: fulfillment.state,
+          currentBatchSeq: fulfillment.batchSeq,
+          attempts: fulfillment.attempts,
+          lastSuccessReceiptId: fulfillment.lastSuccessReceiptId,
+          lastFailureAt: fulfillment.lastFailureAt,
+          lastFailureReason: fulfillment.lastFailureReason,
+          confirmedAt: fulfillment.confirmedAt,
+          confirmedBy: fulfillment.confirmedBy,
+          retries: fulfillment.retries.map((retry) => ({
+            round: retry.round,
+            batch: retry.batch,
+            reason: retry.reason,
+            retriedAt: retry.retriedAt,
+            retriedBy: retry.retriedBy,
+          })),
+          receipts: fulfillment.receipts.map((receipt) => ({
+            receivedAt: receipt.receivedAt,
+            receivedBy: receipt.receivedBy,
+            batch: receipt.batch,
+            batchSeq: receipt.batchSeq,
+            outcome: receipt.outcome,
+            status: receipt.status,
+            reason: receipt.reason,
+            credentialRef: receipt.credentialRef,
+            credentialDigest: receipt.credentialDigest,
+            detail: receipt.detail,
+          })),
+        })),
+        fulfillmentDiscrepancies: request.fulfillmentDiscrepancies.map((discrepancy) => ({
+          systemName:
+            workspace.systems.find((system) => system.id === discrepancy.systemId)?.name ??
+            discrepancy.systemId,
+          kind: discrepancy.kind,
+          description: discrepancy.description,
+          raisedAt: discrepancy.raisedAt,
+          raisedBy: discrepancy.raisedBy,
+          status: discrepancy.status,
+          resolution: discrepancy.resolution,
+          resolvedAt: discrepancy.resolvedAt,
+          resolvedBy: discrepancy.resolvedBy,
+        })),
         tasks: request.tasks.map((task) => ({
           name: task.name,
           status: task.status,
@@ -239,7 +310,7 @@ export function AuditPage() {
           <Badge colorScheme="green">已校验</Badge>
         </Flex>
         <Text color="gray.600" fontSize="sm">
-          导出内容仅包含掩码身份引用、摘要、任务状态、证据元数据和审计记录；系统不会导出原始身份材料。
+          导出内容仅包含掩码身份引用、摘要、任务状态、证据元数据、跨系统凭证台账（含每次接收与忽略原因）、凭证差异处理记录和操作审计；系统不会导出原始身份材料或凭证明文。
         </Text>
       </Box>
     </Box>

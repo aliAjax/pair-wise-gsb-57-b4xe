@@ -214,6 +214,19 @@ export function RequestListPage() {
                         {request.conflicts.length ? (
                           <Badge colorScheme="red">{request.conflicts.length} 项冲突</Badge>
                         ) : null}
+                        {request.fulfillmentDiscrepancies.some((item) => item.status === 'open') ? (
+                          <Badge colorScheme="orange">
+                            {
+                              request.fulfillmentDiscrepancies.filter(
+                                (item) => item.status === 'open',
+                              ).length
+                            }{' '}
+                            项凭证差异
+                          </Badge>
+                        ) : null}
+                        {request.systemFulfillments.some((item) => item.state === 'failed') ? (
+                          <Badge colorScheme="red">系统失败待重试</Badge>
+                        ) : null}
                       </HStack>
                     </Td>
                     <Td>
