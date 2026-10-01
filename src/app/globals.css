@@ -88,6 +88,10 @@ a {
   border-left-color: #3e73a4;
 }
 
+.metric.success {
+  border-left-color: #2f8f5b;
+}
+
 .two-column {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.9fr);

@@ -93,6 +93,20 @@ export function useAddEvidenceMutation() {
   )
 }
 
+export function useRecordCredentialMutation() {
+  return useWorkspaceMutation(
+    (input: Omit<Parameters<typeof trpc.request.recordCredential.mutate>[0], 'state'>, state) =>
+      trpc.request.recordCredential.mutate({ ...input, state }),
+  )
+}
+
+export function useRetrySystemMutation() {
+  return useWorkspaceMutation(
+    (input: Omit<Parameters<typeof trpc.request.retrySystem.mutate>[0], 'state'>, state) =>
+      trpc.request.retrySystem.mutate({ ...input, state }),
+  )
+}
+
 export function useAddConflictMutation() {
   return useWorkspaceMutation(
     (input: Omit<Parameters<typeof trpc.request.addConflict.mutate>[0], 'state'>, state) =>

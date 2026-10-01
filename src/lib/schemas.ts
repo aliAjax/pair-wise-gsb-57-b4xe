@@ -71,6 +71,43 @@ export const auditEntrySchema = z.object({
   createdAt: z.string(),
 })
 
+export const credentialReceiptSchema = z.object({
+  id: z.string(),
+  systemId: z.string(),
+  batchSeq: z.number().int().nonnegative(),
+  batchLabel: z.string(),
+  credentialRef: z.string(),
+  credentialDigest: z.string(),
+  outcome: z.enum([
+    'accepted-success',
+    'accepted-failure',
+    'ignored-duplicate',
+    'ignored-stale-batch',
+  ]),
+  failureNote: z.string(),
+  receivedAt: z.string(),
+  receivedFrom: z.string(),
+  ignoredReason: z.string(),
+})
+
+export const systemFulfillmentSchema = z.object({
+  systemId: z.string(),
+  status: z.enum(['awaiting', 'failed', 'confirmed']),
+  currentBatchSeq: z.number().int().positive(),
+  attempts: z.number().int().nonnegative(),
+  retryCount: z.number().int().nonnegative(),
+  lastSuccess: z
+    .object({
+      credentialRef: z.string(),
+      credentialDigest: z.string(),
+      batchSeq: z.number().int().nonnegative(),
+      receivedAt: z.string(),
+    })
+    .nullable(),
+  lastFailureNote: z.string(),
+  lastFailureAt: z.string().optional(),
+})
+
 export const dataSystemSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -96,6 +133,8 @@ export const privacyRequestSchema = z.object({
   extendedDays: z.number(),
   duplicateOf: z.string().optional(),
   affectedSystemIds: z.array(z.string()),
+  systemFulfillments: z.array(systemFulfillmentSchema).default([]),
+  credentialLedger: z.array(credentialReceiptSchema).default([]),
   tasks: z.array(workflowStepSchema),
   evidence: z.array(evidenceSchema),
   conflicts: z.array(z.string()),
@@ -170,6 +209,27 @@ export const evidenceInputSchema = z.object({
   operator: z.string(),
 })
 
+export const credentialInputSchema = z.object({
+  state: workspaceStateSchema,
+  requestId: z.string(),
+  systemId: z.string().min(1),
+  batchSeq: z.number().int().nonnegative(),
+  batchLabel: z.string().min(1),
+  credentialRef: z.string().min(4),
+  outcome: z.enum(['success', 'failure']),
+  failureNote: z.string(),
+  receivedFrom: z.string().min(1),
+  operator: z.string(),
+})
+
+export const retrySystemInputSchema = z.object({
+  state: workspaceStateSchema,
+  requestId: z.string(),
+  systemId: z.string().min(1),
+  note: z.string().min(2),
+  operator: z.string(),
+})
+
 export const conflictInputSchema = z.object({
   state: workspaceStateSchema,
   requestId: z.string(),
@@ -221,6 +281,8 @@ export type Region = z.infer<typeof regionSchema>
 export type IdentityCheck = z.infer<typeof identitySchema>
 export type WorkflowStep = z.infer<typeof workflowStepSchema>
 export type ExecutionEvidence = z.infer<typeof evidenceSchema>
+export type CredentialReceipt = z.infer<typeof credentialReceiptSchema>
+export type SystemFulfillment = z.infer<typeof systemFulfillmentSchema>
 export type ReviewComment = z.infer<typeof commentSchema>
 export type AuditEntry = z.infer<typeof auditEntrySchema>
 export type DataSystem = z.infer<typeof dataSystemSchema>
@@ -257,4 +319,17 @@ export const systemStatusLabels: Record<DataSystem['status'], string> = {
   active: '在用',
   maintenance: '维护中',
   retired: '已退役',
+}
+
+export const systemFulfillmentLabels: Record<SystemFulfillment['status'], string> = {
+  awaiting: '等待凭证',
+  failed: '系统失败',
+  confirmed: '已确认',
+}
+
+export const credentialOutcomeLabels: Record<CredentialReceipt['outcome'], string> = {
+  'accepted-success': '接收·成功凭证',
+  'accepted-failure': '接收·失败通知',
+  'ignored-duplicate': '忽略·重复凭证',
+  'ignored-stale-batch': '忽略·旧批次迟到',
 }

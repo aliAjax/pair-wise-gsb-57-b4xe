@@ -48,17 +48,22 @@ import {
   useAssignTaskMutation,
   useCloseRequestMutation,
   useExtendRequestMutation,
+  useRecordCredentialMutation,
   useResolveConflictMutation,
+  useRetrySystemMutation,
   useSaveRequestMutation,
   useTaskActionMutation,
   useVerifyIdentityMutation,
   useWorkspaceQuery,
 } from '@/lib/hooks'
 import {
+  credentialOutcomeLabels,
   regionLabels,
   requestTypeLabels,
+  systemFulfillmentLabels,
   type Region,
   type RequestType,
+  type SystemFulfillment,
   type WorkflowStep,
 } from '@/lib/schemas'
 import { deadlineState } from '@/services/workflow'
@@ -73,6 +78,8 @@ type DialogType =
   | 'resolve'
   | 'extend'
   | 'close'
+  | 'credential'
+  | 'retry'
   | null
 
 export function RequestDetailPage({ requestId }: { requestId: string }) {
@@ -82,6 +89,7 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
   const request = data?.requests.find((item) => item.id === requestId)
   const [dialog, setDialog] = useState<DialogType>(null)
   const [selectedTask, setSelectedTask] = useState<WorkflowStep>()
+  const [selectedSystem, setSelectedSystem] = useState<SystemFulfillment>()
   const [conflictIndex, setConflictIndex] = useState(0)
   const [content, setContent] = useState('')
   const [assignee, setAssignee] = useState('')
@@ -90,6 +98,14 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
     'execution-log' | 'screenshot' | 'signed-record' | 'system-response'
   >('execution-log')
   const [extendDays, setExtendDays] = useState(15)
+  const [credentialForm, setCredentialForm] = useState({
+    batchSeq: 1,
+    batchLabel: '首批-B1',
+    credentialRef: '',
+    outcome: 'success' as 'success' | 'failure',
+    failureNote: '',
+    receivedFrom: '',
+  })
   const [editForm, setEditForm] = useState({
     requesterName: '',
     requesterContact: '',
@@ -108,6 +124,8 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
   const extendRequest = useExtendRequestMutation()
   const closeRequest = useCloseRequestMutation()
   const addComment = useAddCommentMutation()
+  const recordCredential = useRecordCredentialMutation()
+  const retrySystem = useRetrySystemMutation()
 
   const comments = useMemo(
     () => data?.comments.filter((comment) => comment.requestId === requestId) ?? [],
@@ -121,14 +139,44 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
   const completedTasks = request.tasks.filter((task) => task.status === 'completed').length
   const currentTask = request.tasks.find((task) => task.status === 'active')
   const systems = data.systems.filter((system) => request.affectedSystemIds.includes(system.id))
+  const fulfillmentBySystem = new Map(
+    request.systemFulfillments.map((entry) => [entry.systemId, entry]),
+  )
+  const confirmedSystems = request.affectedSystemIds.filter((systemId) =>
+    request.systemFulfillments.some(
+      (entry) => entry.systemId === systemId && entry.status === 'confirmed',
+    ),
+  ).length
+  const failedSystems = request.systemFulfillments.filter((entry) => entry.status === 'failed')
+  const credentialReady =
+    confirmedSystems === request.affectedSystemIds.length && request.conflicts.length === 0
 
-  function openDialog(type: DialogType, task?: WorkflowStep, index = 0) {
+  function openDialog(
+    type: DialogType,
+    task?: WorkflowStep,
+    index = 0,
+    fulfillment?: SystemFulfillment,
+  ) {
     if (!request) return
     setSelectedTask(task)
+    setSelectedSystem(fulfillment)
     setConflictIndex(index)
     setDialog(type)
     setContent('')
     if (type === 'assign') setAssignee(task?.assignee ?? '')
+    if (type === 'credential' && fulfillment) {
+      setCredentialForm({
+        batchSeq: fulfillment.currentBatchSeq,
+        batchLabel:
+          fulfillment.status === 'failed'
+            ? `重试批-B${fulfillment.currentBatchSeq}`
+            : `履约批-B${fulfillment.currentBatchSeq}`,
+        credentialRef: '',
+        outcome: 'success',
+        failureNote: fulfillment.lastFailureNote,
+        receivedFrom: '',
+      })
+    }
     if (type === 'edit') {
       setEditForm({
         requesterName: request.requesterName,
@@ -139,6 +187,10 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
       })
     }
     onOpen()
+  }
+
+  function openSystemDialog(type: 'credential' | 'retry', fulfillment: SystemFulfillment) {
+    openDialog(type, undefined, 0, fulfillment)
   }
 
   async function run(action: () => Promise<unknown>, success: string) {
@@ -234,6 +286,34 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
           }),
         '复核结论已记录',
       )
+    } else if (dialog === 'credential' && selectedSystem) {
+      await run(
+        () =>
+          recordCredential.mutateAsync({
+            requestId,
+            systemId: selectedSystem.systemId,
+            batchSeq: credentialForm.batchSeq,
+            batchLabel: credentialForm.batchLabel.trim() || `批次-${credentialForm.batchSeq}`,
+            credentialRef: credentialForm.credentialRef,
+            outcome: credentialForm.outcome,
+            failureNote:
+              credentialForm.outcome === 'failure' ? credentialForm.failureNote : '',
+            receivedFrom: credentialForm.receivedFrom.trim() || '系统回执通道',
+            operator: '数据管理员',
+          }),
+        credentialForm.outcome === 'success' ? '系统成功凭证已登记' : '系统失败通知已登记',
+      )
+    } else if (dialog === 'retry' && selectedSystem) {
+      await run(
+        () =>
+          retrySystem.mutateAsync({
+            requestId,
+            systemId: selectedSystem.systemId,
+            note: content,
+            operator: '数据管理员',
+          }),
+        `已按原系统重试：${selectedSystem.systemId}`,
+      )
     } else if (dialog === 'extend') {
       await run(
         () =>
@@ -288,6 +368,8 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
     resolve: '记录冲突复核结论',
     extend: '延期处理请求',
     close: '关闭请求并合并结果',
+    credential: '登记系统凭证接收',
+    retry: '按原系统发起重试',
   }
 
   return (
@@ -312,7 +394,7 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
         }
       />
 
-      <SimpleGrid columns={4} spacing="4" mb="5">
+      <SimpleGrid columns={5} spacing="4" mb="5">
         <Box className="metric">
           <Text color="gray.600" fontSize="sm">
             当前状态
@@ -358,6 +440,17 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
           </Heading>
           <Text mt="1" color="gray.500" fontSize="xs">
             未解决时禁止关闭
+          </Text>
+        </Box>
+        <Box className={`metric ${credentialReady ? 'success' : failedSystems.length ? 'danger' : 'info'}`}>
+          <Text color="gray.600" fontSize="sm">
+            系统凭证
+          </Text>
+          <Heading mt="2" size="md">
+            {confirmedSystems} / {request.affectedSystemIds.length}
+          </Heading>
+          <Text mt="1" color="gray.500" fontSize="xs">
+            {failedSystems.length ? `${failedSystems.length} 个系统失败待重试` : '全部确认后才可关闭'}
           </Text>
         </Box>
       </SimpleGrid>
@@ -469,6 +562,165 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
           </Alert>
         </Box>
       </div>
+
+      <Box className="panel">
+        <Flex className="panel-title">
+          <Heading size="sm">跨系统凭证履约</Heading>
+          <HStack>
+            <Badge colorScheme={failedSystems.length ? 'red' : credentialReady ? 'green' : 'blue'}>
+              {confirmedSystems} / {request.affectedSystemIds.length} 已确认
+            </Badge>
+            {failedSystems.length ? <Badge colorScheme="red">{failedSystems.length} 个失败</Badge> : null}
+          </HStack>
+        </Flex>
+        <Alert status="info" mb="4" borderRadius="5px">
+          各系统凭证到达顺序不整齐：重复凭证只认第一次，旧批次迟到仅留痕，已确认系统不退回待处理；系统失败按原系统重试，重试只补未成功系统。
+        </Alert>
+        <VStack align="stretch" spacing="3" mb="4">
+          {systems.map((system) => {
+            const fulfillment = fulfillmentBySystem.get(system.id)
+            const status = fulfillment?.status ?? 'awaiting'
+            const closed = request.status === 'completed' || request.status === 'rejected'
+            return (
+              <Box key={system.id} p="3" bg="gray.50" borderRadius="5px">
+                <Flex justify="space-between" align="center" gap="4">
+                  <Box>
+                    <HStack>
+                      <Text fontWeight="600">{system.name}</Text>
+                      <Badge
+                        colorScheme={
+                          status === 'confirmed' ? 'green' : status === 'failed' ? 'red' : 'gray'
+                        }
+                      >
+                        {systemFulfillmentLabels[status]}
+                      </Badge>
+                      {fulfillment?.retryCount ? (
+                        <Badge colorScheme="orange">已重试 {fulfillment.retryCount} 次</Badge>
+                      ) : null}
+                    </HStack>
+                    <Text mt="1" color="gray.600" fontSize="sm">
+                      当前批次：第 {fulfillment?.currentBatchSeq ?? 1} 批 · 接收{' '}
+                      {fulfillment?.attempts ?? 0} 次
+                    </Text>
+                    {fulfillment?.lastSuccess ? (
+                      <Text mt="1" color="green.700" fontSize="sm">
+                        最近成功凭证：<span className="mono">{fulfillment.lastSuccess.credentialRef}</span>{' '}
+                        · {new Date(fulfillment.lastSuccess.receivedAt).toLocaleString('zh-CN')}
+                      </Text>
+                    ) : null}
+                    {fulfillment?.lastFailureNote ? (
+                      <Text mt="1" color="red.700" fontSize="sm">
+                        失败说明：{fulfillment.lastFailureNote}
+                      </Text>
+                    ) : null}
+                  </Box>
+                  <HStack>
+                    <Button
+                      size="xs"
+                      colorScheme="brand"
+                      isDisabled={closed}
+                      onClick={() =>
+                        fulfillment && openSystemDialog('credential', fulfillment)
+                      }
+                    >
+                      登记凭证
+                    </Button>
+                    {status === 'failed' ? (
+                      <Button
+                        size="xs"
+                        colorScheme="orange"
+                        isDisabled={closed}
+                        onClick={() =>
+                          fulfillment && openSystemDialog('retry', fulfillment)
+                        }
+                      >
+                        按原系统重试
+                      </Button>
+                    ) : null}
+                  </HStack>
+                </Flex>
+              </Box>
+            )
+          })}
+        </VStack>
+
+        <Heading size="xs" mb="3">
+          凭证接收台账（只增不改，可还原每次接收与忽略原因）
+        </Heading>
+        <TableContainer maxH="320px" overflowY="auto" border="1px solid #e0e7ec" borderRadius="5px">
+          <Table size="xs">
+            <Thead position="sticky" top="0" bg="white">
+              <Tr>
+                <Th>接收时间</Th>
+                <Th>系统</Th>
+                <Th>批次</Th>
+                <Th>结果</Th>
+                <Th>凭证（脱敏）/ 说明</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {request.credentialLedger.map((receipt) => {
+                const receiptSystem = data.systems.find((item) => item.id === receipt.systemId)
+                const ignored = receipt.outcome.startsWith('ignored-')
+                return (
+                  <Tr key={receipt.id} bg={ignored ? 'gray.50' : undefined}>
+                    <Td whiteSpace="nowrap">
+                      {new Date(receipt.receivedAt).toLocaleString('zh-CN')}
+                      <Text color="gray.500" fontSize="2xs">
+                        {receipt.receivedFrom}
+                      </Text>
+                    </Td>
+                    <Td>{receiptSystem?.name ?? receipt.systemId}</Td>
+                    <Td whiteSpace="nowrap">
+                      {receipt.batchLabel}
+                      <Text color="gray.500" fontSize="2xs">
+                        第 {receipt.batchSeq} 批
+                      </Text>
+                    </Td>
+                    <Td>
+                      <Badge
+                        colorScheme={
+                          receipt.outcome === 'accepted-success'
+                            ? 'green'
+                            : receipt.outcome === 'accepted-failure'
+                              ? 'red'
+                              : 'gray'
+                        }
+                      >
+                        {credentialOutcomeLabels[receipt.outcome]}
+                      </Badge>
+                    </Td>
+                    <Td>
+                      {ignored ? (
+                        <Text color="gray.600" fontSize="xs">
+                          {receipt.ignoredReason}
+                        </Text>
+                      ) : receipt.outcome === 'accepted-failure' ? (
+                        <Text color="red.700" fontSize="xs">
+                          {receipt.failureNote}
+                        </Text>
+                      ) : (
+                        <Text className="mono" fontSize="xs">
+                          {receipt.credentialRef} · {receipt.credentialDigest}
+                        </Text>
+                      )}
+                    </Td>
+                  </Tr>
+                )
+              })}
+              {!request.credentialLedger.length ? (
+                <Tr>
+                  <Td colSpan={5}>
+                    <Text color="gray.500" fontSize="sm">
+                      尚未收到任何系统凭证。
+                    </Text>
+                  </Td>
+                </Tr>
+              ) : null}
+            </Tbody>
+          </Table>
+        </TableContainer>
+      </Box>
 
       <div className="three-column">
         <Box className="panel">
@@ -860,19 +1112,138 @@ export function RequestDetailPage({ requestId }: { requestId: string }) {
               </VStack>
             ) : null}
 
+            {dialog === 'credential' && selectedSystem ? (
+              <VStack align="stretch" spacing="4">
+                <Alert status="info" borderRadius="5px">
+                  系统：
+                  {data.systems.find((item) => item.id === selectedSystem.systemId)?.name ??
+                    selectedSystem.systemId}
+                  ；凭证仅保存脱敏引用与摘要。重复凭证会被自动忽略并留痕，旧批次（批次序号更小）迟到只记录不采纳。
+                </Alert>
+                <Flex gap="4">
+                  <FormControl isRequired>
+                    <FormLabel>批次序号</FormLabel>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={credentialForm.batchSeq}
+                      onChange={(event) =>
+                        setCredentialForm({
+                          ...credentialForm,
+                          batchSeq: Number(event.target.value),
+                        })
+                      }
+                    />
+                  </FormControl>
+                  <FormControl isRequired>
+                    <FormLabel>批次标签</FormLabel>
+                    <Input
+                      value={credentialForm.batchLabel}
+                      onChange={(event) =>
+                        setCredentialForm({ ...credentialForm, batchLabel: event.target.value })
+                      }
+                      placeholder="例如 首批-B1"
+                    />
+                  </FormControl>
+                </Flex>
+                <FormControl isRequired>
+                  <FormLabel>凭证引用 / 回执编号</FormLabel>
+                  <Input
+                    value={credentialForm.credentialRef}
+                    onChange={(event) =>
+                      setCredentialForm({ ...credentialForm, credentialRef: event.target.value })
+                    }
+                    placeholder="系统回执编号，系统将自动脱敏后保存"
+                  />
+                </FormControl>
+                <FormControl isRequired>
+                  <FormLabel>送达来源</FormLabel>
+                  <Input
+                    value={credentialForm.receivedFrom}
+                    onChange={(event) =>
+                      setCredentialForm({ ...credentialForm, receivedFrom: event.target.value })
+                    }
+                    placeholder="例如 订单平台·离线加密包"
+                  />
+                </FormControl>
+                <FormControl>
+                  <FormLabel>本次接收结果</FormLabel>
+                  <Select
+                    value={credentialForm.outcome}
+                    onChange={(event) =>
+                      setCredentialForm({
+                        ...credentialForm,
+                        outcome: event.target.value as 'success' | 'failure',
+                      })
+                    }
+                  >
+                    <option value="success">成功凭证</option>
+                    <option value="failure">系统失败通知</option>
+                  </Select>
+                </FormControl>
+                {credentialForm.outcome === 'failure' ? (
+                  <FormControl isRequired>
+                    <FormLabel>失败说明</FormLabel>
+                    <Textarea
+                      value={credentialForm.failureNote}
+                      onChange={(event) =>
+                        setCredentialForm({ ...credentialForm, failureNote: event.target.value })
+                      }
+                      placeholder="说明系统失败原因，该说明会保留用于按原系统重试"
+                    />
+                  </FormControl>
+                ) : null}
+              </VStack>
+            ) : null}
+
+            {dialog === 'retry' && selectedSystem ? (
+              <VStack align="stretch" spacing="4">
+                <Alert status="warning" borderRadius="5px">
+                  将按原系统
+                  {data.systems.find((item) => item.id === selectedSystem.systemId)?.name ??
+                    selectedSystem.systemId}
+                  发起第 {selectedSystem.retryCount + 1} 次重试，开启第
+                  {selectedSystem.currentBatchSeq + 1} 批；只补该未成功系统，已确认系统结果不动。
+                </Alert>
+                {selectedSystem.lastFailureNote ? (
+                  <Box className="summary-box">
+                    <Text fontWeight="600">保留的最近失败说明</Text>
+                    <Text mt="1" fontSize="sm" color="red.700">
+                      {selectedSystem.lastFailureNote}
+                    </Text>
+                  </Box>
+                ) : null}
+                <FormControl isRequired>
+                  <FormLabel>重试说明</FormLabel>
+                  <Textarea
+                    value={content}
+                    onChange={(event) => setContent(event.target.value)}
+                    placeholder="说明重试范围、原失败依据和补发要求"
+                  />
+                </FormControl>
+              </VStack>
+            ) : null}
+
             {['block', 'conflict', 'resolve', 'close'].includes(dialog ?? '') ? (
-              <FormControl isRequired>
-                <FormLabel>{dialog === 'close' ? '结果合并说明' : '原因与说明'}</FormLabel>
-                <Textarea
-                  value={content}
-                  onChange={(event) => setContent(event.target.value)}
-                  placeholder={
-                    dialog === 'close'
-                      ? '说明各系统处理结果、保留的例外和最终结论'
-                      : '填写可审计的原因和处理依据'
-                  }
-                />
-              </FormControl>
+              <VStack align="stretch" spacing="3">
+                {dialog === 'close' && !credentialReady ? (
+                  <Alert status="error" borderRadius="5px">
+                    仍有受影响系统缺少最新成功凭证或差异未处理完，服务端将拒绝关闭；请先完成失败系统重试并登记成功凭证。
+                  </Alert>
+                ) : null}
+                <FormControl isRequired>
+                  <FormLabel>{dialog === 'close' ? '结果合并说明' : '原因与说明'}</FormLabel>
+                  <Textarea
+                    value={content}
+                    onChange={(event) => setContent(event.target.value)}
+                    placeholder={
+                      dialog === 'close'
+                        ? '说明各系统处理结果、保留的例外和最终结论'
+                        : '填写可审计的原因和处理依据'
+                    }
+                  />
+                </FormControl>
+              </VStack>
             ) : null}
 
             {dialog === 'extend' ? (

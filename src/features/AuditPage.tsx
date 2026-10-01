@@ -96,6 +96,31 @@ export function AuditPage() {
         affectedSystems: workspace.systems
           .filter((system) => request.affectedSystemIds.includes(system.id))
           .map((system) => system.name),
+        systemFulfillments: request.systemFulfillments.map((entry) => {
+          const system = workspace.systems.find((item) => item.id === entry.systemId)
+          return {
+            system: system?.name ?? entry.systemId,
+            status: entry.status,
+            currentBatchSeq: entry.currentBatchSeq,
+            attempts: entry.attempts,
+            retryCount: entry.retryCount,
+            lastSuccess: entry.lastSuccess,
+            lastFailureNote: entry.lastFailureNote,
+            lastFailureAt: entry.lastFailureAt,
+          }
+        }),
+        credentialLedger: request.credentialLedger.map((receipt) => ({
+          system: workspace.systems.find((item) => item.id === receipt.systemId)?.name ?? receipt.systemId,
+          batchSeq: receipt.batchSeq,
+          batchLabel: receipt.batchLabel,
+          outcome: receipt.outcome,
+          credentialRef: receipt.credentialRef,
+          credentialDigest: receipt.credentialDigest,
+          failureNote: receipt.failureNote,
+          ignoredReason: receipt.ignoredReason,
+          receivedFrom: receipt.receivedFrom,
+          receivedAt: receipt.receivedAt,
+        })),
         tasks: request.tasks.map((task) => ({
           name: task.name,
           status: task.status,

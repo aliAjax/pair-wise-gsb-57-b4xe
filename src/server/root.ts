@@ -7,8 +7,10 @@ import {
   closeRequest,
   createRequest,
   extendRequest,
+  recordCredential,
   recordExport,
   resolveConflict,
+  retrySystem,
   saveRequest,
   taskAction,
   verifyIdentity,
@@ -20,11 +22,13 @@ import {
   commentInputSchema,
   conflictInputSchema,
   createRequestInputSchema,
+  credentialInputSchema,
   evidenceInputSchema,
   extendRequestInputSchema,
   identityInputSchema,
   recordExportInputSchema,
   resolveConflictInputSchema,
+  retrySystemInputSchema,
   saveRequestInputSchema,
   taskActionInputSchema,
 } from '@/lib/schemas'
@@ -105,6 +109,33 @@ export const appRouter = t.router({
             input.evidenceType,
             input.operator,
           ),
+        ),
+      ),
+    recordCredential: publicProcedure
+      .input(credentialInputSchema)
+      .mutation(({ input }) =>
+        execute(() =>
+          recordCredential(
+            input.state,
+            input.requestId,
+            {
+              systemId: input.systemId,
+              batchSeq: input.batchSeq,
+              batchLabel: input.batchLabel,
+              credentialRef: input.credentialRef,
+              outcome: input.outcome,
+              failureNote: input.failureNote,
+              receivedFrom: input.receivedFrom,
+            },
+            input.operator,
+          ),
+        ),
+      ),
+    retrySystem: publicProcedure
+      .input(retrySystemInputSchema)
+      .mutation(({ input }) =>
+        execute(() =>
+          retrySystem(input.state, input.requestId, input.systemId, input.note, input.operator),
         ),
       ),
     addConflict: publicProcedure

@@ -214,6 +214,30 @@ export function RequestListPage() {
                         {request.conflicts.length ? (
                           <Badge colorScheme="red">{request.conflicts.length} 项冲突</Badge>
                         ) : null}
+                        {!['completed', 'rejected'].includes(request.status) &&
+                        request.affectedSystemIds.length ? (
+                          <Badge
+                            colorScheme={
+                              request.systemFulfillments.every(
+                                (entry) => entry.status === 'confirmed',
+                              ) && request.systemFulfillments.length === request.affectedSystemIds.length
+                                ? 'green'
+                                : request.systemFulfillments.some(
+                                      (entry) => entry.status === 'failed',
+                                    )
+                                  ? 'red'
+                                  : 'gray'
+                            }
+                          >
+                            凭证{' '}
+                            {
+                              request.systemFulfillments.filter(
+                                (entry) => entry.status === 'confirmed',
+                              ).length
+                            }
+                            /{request.affectedSystemIds.length}
+                          </Badge>
+                        ) : null}
                       </HStack>
                     </Td>
                     <Td>

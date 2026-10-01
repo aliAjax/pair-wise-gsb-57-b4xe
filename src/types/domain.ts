@@ -1,4 +1,5 @@
 export type {
+  CredentialReceipt,
   DataSystem,
   AuditEntry,
   ExecutionEvidence,
@@ -8,6 +9,7 @@ export type {
   RequestStatus,
   RequestType,
   ReviewComment,
+  SystemFulfillment,
   WorkflowStep,
   WorkspaceState,
 } from '@/lib/schemas'
